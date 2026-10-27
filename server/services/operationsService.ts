@@ -1,0 +1,112 @@
+import { OperationsRepository } from '../repositories/operationsRepository';
+import { AdminRepository } from '../repositories/adminRepository';
+import { Booking, DailyLoggerSummary, FacilityRecordSummary, SystemSettings } from '../../src/types';
+
+export class OperationsService {
+  private adminRepository = new AdminRepository();
+
+  constructor(private repository: OperationsRepository) {}
+
+  public async getBookings(branch?: string, month?: string, search?: string): Promise<Booking[]> {
+    return await this.repository.getBookings({ branch, month, search });
+  }
+
+  public async getSummaryMetrics(branch?: string, month?: string): Promise<DailyLoggerSummary> {
+    const bookings = await this.getBookings(branch, month);
+    const qualifying = bookings.filter((b) => b.status !== 'Cancelled');
+
+    const monthlyRevenue = qualifying.reduce((sum, b) => sum + b.amount, 0);
+    const totalBookings = qualifying.length;
+    const activeBookings = qualifying.filter((b) => b.status === 'Active' || b.status === 'Expiring Soon').length;
+    const expiredBookings = qualifying.filter((b) => b.status === 'Expired').length;
+
+    return {
+      monthlyRevenue,
+      totalBookings,
+      activeBookings,
+      expiredBookings,
+      activeSubscriptions: activeBookings,
+      expiredSubscriptions: expiredBookings,
+    };
+  }
+
+  public async getFacilityRecords(filters?: {
+    branch?: string;
+    dateFilter?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<FacilityRecordSummary[]> {
+    return await this.repository.getFacilityRecords(filters);
+  }
+
+  public async createBooking(bookingData: Omit<Booking, 'id' | 'createdAt'>): Promise<Booking> {
+    const daysUsed = bookingData.daysUsed ?? 1;
+    const daysLeft = Math.max(0, (bookingData.daysCount || 1) - daysUsed);
+    const status = daysLeft > 0 ? 'Active' : 'Expired';
+
+    const processedData = {
+      ...bookingData,
+      daysUsed,
+      daysLeft,
+      status: bookingData.status || status,
+    };
+
+    const created = await this.repository.addBooking(processedData);
+    try {
+      const { executeQuery } = await import('../database/db');
+      await executeQuery(
+        `INSERT INTO system_notifications (title, message, type, is_read, created_at) VALUES (?, ?, 'success', 0, CURRENT_TIMESTAMP)`,
+        ['New Booking Created', `Booking ${created.id} created for ${created.clientName || 'Client'}.`]
+      );
+    } catch (e: any) {
+      console.warn('Could not record booking notification:', e?.message);
+    }
+    return created;
+  }
+
+  public async updateBooking(id: string, bookingData: Partial<Booking>): Promise<Booking> {
+    return await this.repository.updateBooking(id, bookingData);
+  }
+
+  public async getNextBookingId(): Promise<string> {
+    return await this.repository.getNextBookingId();
+  }
+
+  public async getSettings(): Promise<SystemSettings> {
+    return await this.repository.getSettings();
+  }
+
+  public async updateSettings(settings: Partial<SystemSettings>): Promise<SystemSettings> {
+    return await this.repository.updateSettings(settings);
+  }
+
+  public async getProfileSettings(userId?: string) {
+    return await this.repository.getProfileSettings(userId);
+  }
+
+  public async updateProfileSettings(data: {
+    userId?: string;
+    profileName: string;
+    profileEmail: string;
+    profilePhone: string;
+    profilePhoto?: string;
+  }) {
+    return await this.repository.updateProfileSettings(data);
+  }
+
+  public async searchClients(query?: string) {
+    return await this.repository.getClients(query);
+  }
+
+  public async getNotifications() {
+    return await this.repository.getNotifications();
+  }
+
+  public async markAllNotificationsRead() {
+    return await this.repository.markAllNotificationsRead();
+  }
+
+  public async markNotificationRead(id: string | number) {
+    return await this.repository.markNotificationRead(id);
+  }
+}

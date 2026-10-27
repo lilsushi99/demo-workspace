@@ -1,0 +1,219 @@
+import React, { useState, useEffect } from 'react';
+import {
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
+import { DashboardFilters } from '../../types';
+import { FinanceApiService } from '../../services/financeService';
+
+interface ExpenseOverviewCardProps {
+  branchFilter?: string;
+  filters?: DashboardFilters;
+}
+
+interface ExpenseCategoryData {
+  name: string;
+  value: number;
+  color: string;
+}
+
+const PALETTE = [
+  '#2563EB', '#0284C7', '#7C3AED', '#D97706', '#10B981',
+  '#06B6D4', '#059669', '#DC2626', '#8B5CF6', '#EC4899',
+];
+
+export const ExpenseOverviewCard: React.FC<ExpenseOverviewCardProps> = ({
+  branchFilter = 'all',
+  filters,
+}) => {
+  const selectedBranch = filters?.branch || branchFilter;
+  const selectedRange = filters?.dateRange || 'this_month';
+
+  const [categories, setCategories] = useState<ExpenseCategoryData[]>([]);
+  const [totalExpense, setTotalExpense] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = () => {
+    setLoading(true);
+    setError(null);
+    let period: string = 'all';
+    if (selectedRange === 'last_7' || selectedRange === '7D') period = 'last_7_days';
+    else if (selectedRange === 'last_30' || selectedRange === '30D') period = 'last_30_days';
+    else if (selectedRange === 'this_month') period = 'this_month';
+    else if (selectedRange === 'last_12_months' || selectedRange === '12M') period = 'last_12_months';
+    else if (selectedRange === 'today') period = 'today';
+    else if (selectedRange === 'custom') period = 'custom';
+    else if (selectedRange === 'all') period = 'all';
+
+    FinanceApiService.fetchAnalytics({
+      branch: selectedBranch !== 'all' ? selectedBranch : undefined,
+      period: period as any,
+      startDate: selectedRange === 'custom' ? filters?.startDate : undefined,
+      endDate: selectedRange === 'custom' ? filters?.endDate : undefined,
+    })
+      .then((data) => {
+        setTotalExpense(data.totalExpenses || 0);
+        if (data.expenseCategoryBreakdown && data.expenseCategoryBreakdown.length > 0) {
+          const mapped = data.expenseCategoryBreakdown.map((item, idx) => ({
+            name: item.category || 'Uncategorized',
+            value: item.amount,
+            color: item.color || PALETTE[idx % PALETTE.length],
+          }));
+          setCategories(mapped);
+        } else {
+          setCategories([]);
+        }
+        setError(null);
+      })
+      .catch((err) => {
+        console.error('Failed to load expense category overview:', err);
+        setError(err.message || 'Failed to load expense breakdown');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    loadData();
+
+    const handleRefresh = () => {
+      loadData();
+    };
+
+    window.addEventListener('nexus:refresh-financials', handleRefresh);
+    return () => window.removeEventListener('nexus:refresh-financials', handleRefresh);
+  }, [selectedBranch, selectedRange, filters?.startDate, filters?.endDate]);
+
+  return (
+    <div className="bg-white rounded-xl p-6 shadow-xs font-sans flex flex-col justify-between h-full min-h-[380px]">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-gray-100 pb-4 mb-3">
+        <div>
+          <h3 className="font-heading text-base font-semibold text-gray-900 leading-none">
+            Expense Overview
+          </h3>
+        </div>
+        <div className="text-right">
+          <span className="text-xs font-normal text-gray-500 block">
+            Total Operating Expenses
+          </span>
+          <span className="text-sm font-semibold text-gray-900 font-heading mt-0.5 block">
+            ₦{totalExpense.toLocaleString()}
+          </span>
+        </div>
+      </div>
+
+      {/* Pie Chart & Center Metric */}
+      <div className="relative flex-1 flex items-center justify-center min-h-[190px]">
+        {error ? (
+          <div className="flex flex-col items-center justify-center text-center p-6 bg-amber-50/60 border border-amber-200/70 rounded-xl max-w-xs">
+            <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center mb-1.5">
+              <i className="fa-solid fa-triangle-exclamation text-xs"></i>
+            </div>
+            <p className="text-xs font-semibold text-gray-800 mb-0.5">{error}</p>
+            <p className="text-[11px] text-gray-500 mb-2.5">Branch expenses could not be loaded.</p>
+            <button
+              onClick={loadData}
+              className="px-3 py-1 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-800 hover:bg-amber-100 transition-colors cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        ) : loading && categories.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center p-6">
+            <i className="fa-solid fa-circle-notch fa-spin text-blue-600 text-lg mb-2"></i>
+            <p className="text-xs text-gray-500">Loading expense breakdown...</p>
+          </div>
+        ) : categories.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center p-6">
+            <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center text-gray-400 mb-2">
+              <i className="fa-solid fa-receipt text-sm"></i>
+            </div>
+            <p className="text-xs font-semibold text-gray-600">No Expenses Recorded</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Operating expenses for this timeframe are currently zero.</p>
+          </div>
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={190}>
+              <PieChart>
+                <Pie
+                  data={categories}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={52}
+                  outerRadius={78}
+                  paddingAngle={3}
+                  dataKey="value"
+                >
+                  {categories.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value: number) => [`₦${value.toLocaleString()}`, 'Expense']}
+                  contentStyle={{
+                    backgroundColor: '#1E293B',
+                    border: 'none',
+                    borderRadius: '12px',
+                    color: '#FFF',
+                    fontSize: '11px',
+                    padding: '8px 12px',
+                  }}
+                  itemStyle={{ color: '#F8FAFC' }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+
+            {/* Center Donut Label */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+              <span className="text-[10px] font-normal text-gray-400">
+                Categories
+              </span>
+              <span className="text-xs font-semibold text-gray-900 font-heading mt-0.5">
+                {categories.length} Items
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Category Grid Legend */}
+      {categories.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 pt-3 border-t border-gray-100 max-h-[140px] overflow-y-auto pr-1">
+          {categories.map((item, idx) => {
+            const percent = totalExpense > 0 ? ((item.value / totalExpense) * 100).toFixed(1) : '0';
+            return (
+              <div
+                key={idx}
+                className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50/80 hover:bg-gray-100/70 transition-colors"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="text-xs font-normal text-gray-700 truncate">
+                    {item.name}
+                  </span>
+                </div>
+                <div className="text-right shrink-0 pl-1">
+                  <span className="text-xs font-medium text-gray-900 font-heading block leading-none">
+                    ₦{item.value.toLocaleString()}
+                  </span>
+                  <span className="text-[10px] text-gray-400 font-normal">
+                    {percent}%
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};

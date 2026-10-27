@@ -1,0 +1,500 @@
+import React, { useState, useEffect } from 'react';
+import { CATEGORY_COLOR_SWATCHES, FALLBACK_CATEGORY_COLOR, isHexColor } from '../../constants/categoryColors';
+import { ExpenseCategory } from '../../types';
+import { ExpenseApiService } from '../../services/expenseService';
+import { useToast } from '../../context/ToastContext';
+import { CustomSelect, SelectOption } from '../common/CustomSelect';
+
+const statusOptions: SelectOption[] = [
+  { id: 'all', label: 'All Status' },
+  { id: 'Active', label: 'Active' },
+  { id: 'Inactive', label: 'Inactive' },
+];
+
+const categoryStatusOptions: SelectOption[] = [
+  { id: 'Active', label: 'Active' },
+  { id: 'Inactive', label: 'Inactive' },
+];
+
+export const ExpenseCategoriesPage: React.FC = () => {
+  const { showToast } = useToast();
+  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Inactive'>('all');
+
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<ExpenseCategory | null>(null);
+  const [categoryName, setCategoryName] = useState('');
+  const [categoryDesc, setCategoryDesc] = useState('');
+  const [categoryStatus, setCategoryStatus] = useState<'Active' | 'Inactive'>('Active');
+  const [categoryColor, setCategoryColor] = useState<string>(CATEGORY_COLOR_SWATCHES[0]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const loadCategories = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await ExpenseApiService.fetchCategories();
+      setCategories(data);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch expense categories');
+      showToast('Error', err.message || 'Failed to fetch expense categories', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCategories();
+  }, []);
+
+  const handleOpenCreate = () => {
+    setEditingCategory(null);
+    setCategoryName('');
+    setCategoryDesc('');
+    setCategoryStatus('Active');
+    // Suggest the first swatch no other category is using yet.
+    const used = new Set(categories.map((c) => (c.color || '').toUpperCase()));
+    setCategoryColor(CATEGORY_COLOR_SWATCHES.find((c) => !used.has(c)) || CATEGORY_COLOR_SWATCHES[0]);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (cat: ExpenseCategory) => {
+    setEditingCategory(cat);
+    setCategoryName(cat.name);
+    setCategoryDesc(cat.description || '');
+    setCategoryStatus(cat.status);
+    setCategoryColor(cat.color || FALLBACK_CATEGORY_COLOR);
+    setIsModalOpen(true);
+  };
+
+  // Delete Confirmation State
+  const [categoryToDelete, setCategoryToDelete] = useState<ExpenseCategory | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleOpenDelete = (cat: ExpenseCategory) => {
+    setCategoryToDelete(cat);
+    setDeleteError(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!categoryToDelete) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await ExpenseApiService.deleteCategory(categoryToDelete.id);
+      showToast('Category Deleted', `Category "${categoryToDelete.name}" removed successfully.`, 'success');
+      setCategoryToDelete(null);
+      loadCategories();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete category.');
+      showToast('Cannot Delete Category', err.message || 'Category has dependencies and cannot be deleted.', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleDeactivateInstead = async () => {
+    if (!categoryToDelete) return;
+    try {
+      await ExpenseApiService.updateCategory(categoryToDelete.id, {
+        status: 'Inactive',
+      });
+      showToast('Category Deactivated', `Category "${categoryToDelete.name}" has been deactivated to preserve expense history.`, 'info');
+      setCategoryToDelete(null);
+      setDeleteError(null);
+      loadCategories();
+    } catch (err: any) {
+      showToast('Error', err.message || 'Failed to deactivate category.', 'error');
+    }
+  };
+
+  const handleToggleStatus = async (cat: ExpenseCategory) => {
+    const newStatus = cat.status === 'Active' ? 'Inactive' : 'Active';
+    try {
+      await ExpenseApiService.updateCategory(cat.id, {
+        status: newStatus,
+      });
+      showToast('Status Updated', `Category "${cat.name}" is now ${newStatus}.`, newStatus === 'Active' ? 'success' : 'info');
+      loadCategories();
+    } catch (err: any) {
+      showToast('Error', err.message || 'Failed to update category status.', 'error');
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!categoryName.trim()) {
+      showToast('Validation Error', 'Category name is required.', 'error');
+      return;
+    }
+
+    if (!isHexColor(categoryColor)) {
+      showToast('Validation Error', 'Choose a valid category color.', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      if (editingCategory) {
+        await ExpenseApiService.updateCategory(editingCategory.id, {
+          name: categoryName.trim(),
+          description: categoryDesc.trim(),
+          color: categoryColor,
+          status: categoryStatus,
+        });
+        showToast('Category Updated', `Category "${categoryName}" updated.`, 'success');
+      } else {
+        await ExpenseApiService.createCategory({
+          name: categoryName.trim(),
+          description: categoryDesc.trim(),
+          color: categoryColor,
+        });
+        showToast('Category Created', `New category "${categoryName}" created.`, 'success');
+      }
+      setIsModalOpen(false);
+      loadCategories();
+    } catch (err: any) {
+      showToast('Error', err.message || 'Failed to save category.', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const filteredCategories = categories.filter((cat) => {
+    const matchesSearch =
+      cat.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (cat.description && cat.description.toLowerCase().includes(searchTerm.toLowerCase()));
+    const matchesStatus = statusFilter === 'all' || cat.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  return (
+    <div className="space-y-6 font-sans">
+      {/* Top Header & Action */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 border border-gray-200/80 rounded-2xl shadow-2xs">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+              <i className="fa-solid fa-tags text-sm"></i>
+            </span>
+            Expense Categories Administration
+          </h1>
+          <p className="text-xs text-gray-500 mt-1">
+            Manage operational expense category classification used across financial loggers and reporting
+          </p>
+        </div>
+        <button
+          onClick={handleOpenCreate}
+          className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-xl shadow-xs transition-colors cursor-pointer self-start sm:self-auto"
+        >
+          <i className="fa-solid fa-plus text-xs"></i>
+          Add Expense Category
+        </button>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white p-5 border border-gray-200/80 rounded-2xl shadow-2xs flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Total Categories</p>
+            <p className="text-2xl font-semibold text-gray-900 mt-1">{categories.length}</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+            <i className="fa-solid fa-folder-tree text-base"></i>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 border border-gray-200/80 rounded-2xl shadow-2xs flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Active Categories</p>
+            <p className="text-2xl font-semibold text-emerald-600 mt-1">
+              {categories.filter((c) => c.status === 'Active').length}
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <i className="fa-solid fa-circle-check text-base"></i>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 border border-gray-200/80 rounded-2xl shadow-2xs flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Inactive Categories</p>
+            <p className="text-2xl font-semibold text-gray-600 mt-1">
+              {categories.filter((c) => c.status === 'Inactive').length}
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-gray-500">
+            <i className="fa-solid fa-ban text-base"></i>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Bar & Table */}
+      <div className="bg-white border border-gray-200/80 rounded-2xl shadow-2xs overflow-hidden">
+        <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="relative w-full sm:w-80">
+            <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
+            <input
+              type="text"
+              placeholder="Search category name or description..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-xs text-gray-900 focus:outline-none focus:border-blue-500 transition-all font-sans placeholder:text-gray-400"
+            />
+          </div>
+
+          <div className="w-full sm:w-44 shrink-0">
+            <CustomSelect
+              options={statusOptions}
+              value={statusFilter}
+              onChange={(val) => setStatusFilter(val as any)}
+              icon="fa-solid fa-filter"
+            />
+          </div>
+        </div>
+
+        {/* Categories Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-100 text-[11px] font-medium text-gray-500 uppercase tracking-wider">
+                <th className="py-3.5 px-6">Category ID</th>
+                <th className="py-3.5 px-6">Category Name</th>
+                <th className="py-3.5 px-6">Description</th>
+                <th className="py-3.5 px-6">Status</th>
+                <th className="py-3.5 px-6">Created Date</th>
+                <th className="py-3.5 px-6 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 text-xs">
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-gray-500">
+                    <i className="fa-solid fa-circle-notch fa-spin mr-2 text-blue-600 text-base"></i>
+                    Loading expense categories...
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-red-600 bg-red-50/50">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <div className="flex items-center gap-1.5 font-medium">
+                        <i className="fa-solid fa-triangle-exclamation"></i>
+                        <span>{error}</span>
+                      </div>
+                      <button
+                        onClick={loadCategories}
+                        className="px-3 py-1 bg-white border border-red-300 rounded-lg text-xs font-semibold text-red-800 hover:bg-red-100 transition-colors cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredCategories.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-gray-500">
+                    No expense categories match the selected criteria.
+                  </td>
+                </tr>
+              ) : (
+                filteredCategories.map((cat) => (
+                  <tr key={cat.id} className="hover:bg-gray-50/80 transition-colors">
+                    <td className="py-3.5 px-6 font-mono font-normal text-blue-600">{cat.id}</td>
+                    <td className="py-3.5 px-6 font-medium text-gray-900">
+                      <span className="inline-flex items-center gap-2">
+                        <span
+                          className="inline-block w-3 h-3 rounded-full border border-black/5 shrink-0"
+                          style={{ backgroundColor: cat.color || FALLBACK_CATEGORY_COLOR }}
+                          title={cat.color || FALLBACK_CATEGORY_COLOR}
+                        />
+                        {cat.name}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-6 text-gray-600 max-w-xs truncate">
+                      {cat.description || '—'}
+                    </td>
+                    <td className="py-3.5 px-6">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium ${
+                          cat.status === 'Active'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {cat.status}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-6 text-gray-500">{cat.createdDate || '—'}</td>
+                    <td className="py-3.5 px-6 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => handleOpenEdit(cat)}
+                          className="px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 border border-gray-200 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                          title="Edit Category"
+                        >
+                          <i className="fa-solid fa-pen-to-square text-xs"></i>
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleToggleStatus(cat)}
+                          className={`px-2.5 py-1.5 text-xs font-medium border rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                            cat.status === 'Active'
+                              ? 'text-amber-700 hover:bg-amber-50 border-amber-200'
+                              : 'text-emerald-700 hover:bg-emerald-50 border-emerald-200'
+                          }`}
+                          title={cat.status === 'Active' ? 'Deactivate Category' : 'Activate Category'}
+                        >
+                          <i className={`fa-solid ${cat.status === 'Active' ? 'fa-ban' : 'fa-circle-check'} text-xs`}></i>
+                          {cat.status === 'Active' ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => handleOpenDelete(cat)}
+                          className="px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                          title="Delete Category"
+                        >
+                          <i className="fa-solid fa-trash-can text-xs"></i>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Add / Edit Category Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60 backdrop-blur-xs p-4 overflow-y-auto font-sans">
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-md overflow-hidden transform transition-all">
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+                  <i className="fa-solid fa-tags text-sm"></i>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900 text-base">
+                    {editingCategory ? 'Edit Expense Category' : 'Create Expense Category'}
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    {editingCategory ? 'Update category classification details' : 'Add new operational expense category'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <i className="fa-solid fa-xmark text-lg"></i>
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                  Category Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Fuel, Utilities, Maintenance"
+                  value={categoryName}
+                  onChange={(e) => setCategoryName(e.target.value)}
+                  className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                  Description
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Brief summary of expenses included under this category..."
+                  value={categoryDesc}
+                  onChange={(e) => setCategoryDesc(e.target.value)}
+                  className="w-full bg-white border border-gray-300 rounded-xl p-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
+                  Category Color *
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {CATEGORY_COLOR_SWATCHES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCategoryColor(c)}
+                      aria-label={`Use color ${c}`}
+                      className={`w-7 h-7 rounded-full border-2 transition-all cursor-pointer ${
+                        categoryColor.toUpperCase() === c ? 'border-gray-900 scale-110' : 'border-transparent hover:scale-105'
+                      }`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={isHexColor(categoryColor) ? categoryColor : FALLBACK_CATEGORY_COLOR}
+                    onChange={(e) => setCategoryColor(e.target.value.toUpperCase())}
+                    aria-label="Pick a custom color"
+                    className="w-7 h-7 p-0 rounded-full border border-gray-300 bg-white cursor-pointer"
+                  />
+                  <span className="text-xs font-mono text-gray-500 ml-1">{categoryColor.toUpperCase()}</span>
+                </div>
+              </div>
+
+              {editingCategory && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                    Status
+                  </label>
+                  <CustomSelect
+                    options={categoryStatusOptions}
+                    value={categoryStatus}
+                    onChange={(val) => setCategoryStatus(val as 'Active' | 'Inactive')}
+                  />
+                </div>
+              )}
+
+              <div className="pt-4 border-t border-gray-100 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors uppercase tracking-wider cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-xs transition-colors uppercase tracking-wider flex items-center gap-2 cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <i className="fa-solid fa-spinner fa-spin"></i> Saving...
+                    </>
+                  ) : (
+                    <>
+                      <i className="fa-solid fa-check"></i> Save Category
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
